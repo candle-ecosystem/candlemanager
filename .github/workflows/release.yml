@@ -1,0 +1,150 @@
+name: CandleManager Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-x86_64
+            runner: macos-15-intel
+            binary: candlemanager
+
+          - target: macos-aarch64
+            runner: macos-15
+            binary: candlemanager
+
+          - target: linux-x86_64-glibc
+            runner: ubuntu-24.04
+            binary: candlemanager
+
+          - target: linux-aarch64-glibc
+            runner: ubuntu-24.04-arm
+            binary: candlemanager
+
+          - target: windows-x86_64
+            runner: windows-2025
+            binary: candlemanager.exe
+
+          - target: windows-aarch64
+            runner: windows-11-arm
+            binary: candlemanager.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.99.1
+
+      - name: Configure Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Verify version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "candlemanager"))')
+
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag version $TAG_VERSION does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+
+      - name: Build CandleManager
+        run: cargo build --release --locked
+
+      - name: Package ZIP
+        shell: bash
+        env:
+          BINARY_NAME: ${{ matrix.binary }}
+          TARGET_NAME: ${{ matrix.target }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import zipfile
+          from pathlib import Path
+
+          root = Path.cwd()
+          binary = root / "target" / "release" / os.environ["BINARY_NAME"]
+          dist = root / "dist"
+          dist.mkdir(exist_ok=True)
+
+          if not binary.is_file():
+              raise SystemExit(f"Build output not found: {binary}")
+
+          archive = dist / (
+              f"candlemanager-{os.environ['VERSION']}-"
+              f"{os.environ['TARGET_NAME']}.zip"
+          )
+
+          files = [
+              binary,
+              root / "LICENSE",
+              root / "README.md",
+          ]
+
+          with zipfile.ZipFile(
+              archive, "w", compression=zipfile.ZIP_DEFLATED
+          ) as zf:
+              for file in files:
+                  if file.is_file():
+                      zf.write(file, file.name)
+
+          print(f"Created {archive}")
+          PY
+
+      - name: Upload build archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: candlemanager-${{ matrix.target }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download all archives
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: candlemanager-*
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        working-directory: release-assets
+        run: sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*.zip
+            release-assets/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true

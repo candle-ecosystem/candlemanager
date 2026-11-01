@@ -1,0 +1,77 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+*.rlib
+*.rmeta
+
+# IDEs and editors
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+.DocumentRevisions-V100/
+.TemporaryItems/
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux / desktop environments
+.directory
+.Trash-*/
+.nfs*
+
+# Temporary files and logs
+*.tmp
+*.temp
+*.bak
+*.old
+*.log
+logs/
+tmp/
+temp/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Coverage and profiling
+/coverage/
+/.profraw
+*.profdata
+lcov.info
+grcov/
+
+# Build artifacts and generated binaries
+/debug/
+/release/
+*.dSYM/
+
+# Local tooling
+.direnv/
+.cache/
