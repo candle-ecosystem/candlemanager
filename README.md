@@ -14,4 +14,4 @@ For more information, installation instructions, and usage details, visit the [C
 
 ## License
 
-CandleManager is licensed under the **GNU General Public License v3.0 only (GPL-3.0-only)**. See the [`LICENSE`](LICENSE) file for details.
+CandleManager is licensed under the **GNU General Public License v3.0 only**. See the [`LICENSE`](LICENSE) file for details.
