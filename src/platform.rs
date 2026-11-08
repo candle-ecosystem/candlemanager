@@ -4,8 +4,7 @@ pub fn target() -> Result<String> {
     let os = match std::env::consts::OS {
         "windows" => "windows",
         "macos" => "macos",
-        "linux" if cfg!(target_env = "gnu") => "linux",
-        "linux" => bail!("The published Linux binaries require glibc"),
+        "linux" => "linux",
         other => bail!("Unsupported operating system: {other}"),
     };
     let arch = match std::env::consts::ARCH {
@@ -13,6 +12,10 @@ pub fn target() -> Result<String> {
         "aarch64" => "aarch64",
         other => bail!("Unsupported architecture: {other}"),
     };
-    let suffix = if os == "linux" { "-glibc" } else { "" };
+    let suffix = match (os, cfg!(target_env = "gnu")) {
+        ("linux", true) => "-glibc",
+        ("linux", false) => "-musl",
+        _ => "",
+    };
     Ok(format!("{os}-{arch}{suffix}"))
 }
