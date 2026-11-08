@@ -1,10 +1,12 @@
 name: CandleManager Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -21,23 +23,24 @@ jobs:
           - target: macos-x86_64
             runner: macos-15-intel
             binary: candlemanager
-
           - target: macos-aarch64
             runner: macos-15
             binary: candlemanager
-
           - target: linux-x86_64-glibc
             runner: ubuntu-24.04
             binary: candlemanager
-
           - target: linux-aarch64-glibc
             runner: ubuntu-24.04-arm
             binary: candlemanager
-
+          - target: linux-x86_64-musl
+            runner: ubuntu-24.04
+            binary: candlemanager
+          - target: linux-aarch64-musl
+            runner: ubuntu-24.04-arm
+            binary: candlemanager
           - target: windows-x86_64
             runner: windows-2025
             binary: candlemanager.exe
-
           - target: windows-aarch64
             runner: windows-11-arm
             binary: candlemanager.exe
@@ -45,6 +48,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify version matches tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          TAG_VERSION="${RELEASE_TAG#v}"
+          CARGO_VERSION=$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          with Path("Cargo.toml").open("rb") as f:
+              cargo = tomllib.load(f)
+          print(cargo["package"]["version"])
+          PY
+          )
+
+          if [[ "$RELEASE_TAG" != v* || "$TAG_VERSION" != "$CARGO_VERSION" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+          echo "Version verified: $RELEASE_TAG"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.99.1
@@ -52,41 +84,62 @@ jobs:
       - name: Configure Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Verify version matches tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, '-musl')
         shell: bash
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "candlemanager"))')
-
-          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "::error::Tag version $TAG_VERSION does not match Cargo.toml version $CARGO_VERSION"
-            exit 1
-          fi
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add "$(uname -m)-unknown-linux-musl"
 
       - name: Build CandleManager
-        run: cargo build --release --locked
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == *-musl ]]; then
+            ARCH="$(uname -m)"
+            RUST_TARGET="${ARCH}-unknown-linux-musl"
+            RUSTFLAGS="-C linker=musl-gcc" \
+              cargo build --release --locked --target "$RUST_TARGET"
+          else
+            cargo build --release --locked
+          fi
+
+      - name: Verify static musl linkage
+        if: endsWith(matrix.target, '-musl')
+        shell: bash
+        run: |
+          ARCH="$(uname -m)"
+          BINARY="target/${ARCH}-unknown-linux-musl/release/candlemanager"
+
+          if readelf -l "$BINARY" | grep -q 'INTERP'; then
+            echo "::error::CandleManager contains a dynamic interpreter"
+            exit 1
+          fi
+          if readelf -d "$BINARY" 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "::error::CandleManager has dynamic library dependencies"
+            exit 1
+          fi
+          echo "CandleManager is statically linked."
 
       - name: Package ZIP
         shell: bash
         env:
           BINARY_NAME: ${{ matrix.binary }}
           TARGET_NAME: ${{ matrix.target }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ inputs.tag }}
         run: |
           python - <<'PY'
           import os
+          import platform
           import zipfile
           from pathlib import Path
 
           root = Path.cwd()
-          binary = root / "target" / "release" / os.environ["BINARY_NAME"]
+          target = os.environ["TARGET_NAME"]
+          if target.endswith("-musl"):
+              binary = root / "target" / f"{platform.machine()}-unknown-linux-musl" / "release" / os.environ["BINARY_NAME"]
+          else:
+              binary = root / "target" / "release" / os.environ["BINARY_NAME"]
           dist = root / "dist"
           dist.mkdir(exist_ok=True)
 
@@ -95,22 +148,13 @@ jobs:
 
           archive = dist / (
               f"candlemanager-{os.environ['VERSION']}-"
-              f"{os.environ['TARGET_NAME']}.zip"
+              f"{target}.zip"
           )
-
-          files = [
-              binary,
-              root / "LICENSE",
-              root / "README.md",
-          ]
-
-          with zipfile.ZipFile(
-              archive, "w", compression=zipfile.ZIP_DEFLATED
-          ) as zf:
+          files = [binary, root / "LICENSE", root / "README.md"]
+          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
               for file in files:
                   if file.is_file():
                       zf.write(file, file.name)
-
           print(f"Created {archive}")
           PY
 
@@ -125,7 +169,6 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
 
     steps:
@@ -143,6 +186,7 @@ jobs:
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag }}
           files: |
             release-assets/*.zip
             release-assets/SHA256SUMS.txt
